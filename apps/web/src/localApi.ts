@@ -7,6 +7,8 @@ import { fantasiaHost } from "./fantasiaHost";
 import { ClientSettingsSchema } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
+
 let cachedApi: LocalApi | undefined;
 
 export function createLocalApi(): LocalApi {
@@ -70,7 +72,7 @@ export function createLocalApi(): LocalApi {
         const shared = await fantasiaHost()?.getClientSettings();
         if (shared) {
           try {
-            return Schema.decodeUnknownSync(ClientSettingsSchema)(JSON.parse(shared));
+            return decodeClientSettings(JSON.parse(shared));
           } catch {
             // A settings shape this client cannot read falls back to its own copy.
           }

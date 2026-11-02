@@ -1,9 +1,5 @@
-// Fantasia fork patch (branch `fantasia`). When this client runs inside
-// Fantasia's "T3 Code" tab, Fantasia's preload exposes this narrow host object.
-// The client deliberately stays in browser mode (`window.desktopBridge` absent):
-// it authenticates with the HttpOnly browser-session cookie, so no bearer token
-// ever reaches JavaScript, and it takes upstream's tested web paths everywhere
-// the host does not add something.
+// Fantasia fork patch. Inside Fantasia's tab the client stays in browser mode
+// (no window.desktopBridge), so its session stays in an HttpOnly cookie.
 import type { PickFolderOptions } from "@t3tools/contracts";
 
 export interface FantasiaHost {
