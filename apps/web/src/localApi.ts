@@ -3,6 +3,9 @@ import type { ConfirmDialogOptions, ContextMenuItem, LocalApi } from "@t3tools/c
 import { requestConfirmDialog } from "./confirmDialog";
 import { dismissContextMenu, showContextMenuFallback } from "./contextMenuFallback";
 import { readBrowserClientSettings, writeBrowserClientSettings } from "./clientPersistenceStorage";
+import { fantasiaHost } from "./fantasiaHost";
+import { ClientSettingsSchema } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
 let cachedApi: LocalApi | undefined;
 
@@ -10,6 +13,8 @@ export function createLocalApi(): LocalApi {
   return {
     dialogs: {
       pickFolder: async (options) => {
+        const host = fantasiaHost();
+        if (host) return host.pickFolder(options);
         if (!window.desktopBridge) return null;
         return window.desktopBridge.pickFolder(options);
       },
@@ -60,6 +65,15 @@ export function createLocalApi(): LocalApi {
       getClientSettings: async () => {
         if (window.desktopBridge) {
           return window.desktopBridge.getClientSettings();
+        }
+        // In Fantasia, start from the installed app's settings so both look the same.
+        const shared = await fantasiaHost()?.getClientSettings();
+        if (shared) {
+          try {
+            return Schema.decodeUnknownSync(ClientSettingsSchema)(JSON.parse(shared));
+          } catch {
+            // A settings shape this client cannot read falls back to its own copy.
+          }
         }
         return readBrowserClientSettings();
       },
