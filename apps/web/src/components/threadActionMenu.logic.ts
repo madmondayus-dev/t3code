@@ -3,6 +3,7 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 
 export type ThreadActionMenuId =
   | "find"
+  | "split-view"
   | "new-thread-on-branch"
   | "filter-by-project"
   | "turn-into-project"
@@ -70,6 +71,8 @@ export function buildDraftActionMenuItems(options: {
 export interface ThreadActionMenuState {
   readonly canOperate: boolean;
   readonly canFind?: boolean;
+  /** Fantasia fork patch: whether this thread is one of the split view's panes. */
+  readonly inSplitView?: boolean;
   readonly branch: string | null;
   readonly projectFilter: {
     readonly label: string;
@@ -101,6 +104,7 @@ export interface ThreadActionMenuState {
 export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean {
   return ![
     "find",
+    "split-view",
     "new-thread-on-branch",
     "project-settings",
     "mark-unread",
@@ -120,6 +124,11 @@ export function buildThreadActionMenuItems(
     ...(state.canFind
       ? [{ id: "find" as const, label: "Find in thread", icon: "text-search" }]
       : []),
+    {
+      id: "split-view" as const,
+      label: state.inSplitView ? "Remove from split view" : "Open in split view",
+      icon: "columns",
+    },
     ...(state.branch
       ? [
           {

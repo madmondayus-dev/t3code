@@ -1,8 +1,10 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { Outlet, createFileRoute, redirect, useMatches } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { SplitThreadView } from "../components/SplitThreadView";
 import { ThreadRouteView } from "../components/ThreadRouteView";
+import { useSplitViewStore } from "../splitViewStore";
 import { isAppModalPage } from "../components/sidebar/mainAppLocation";
 import { SidebarInset } from "../components/ui/sidebar";
 import { resolveThreadRouteTarget, type ThreadRouteTarget } from "../threadRoutes";
@@ -28,6 +30,26 @@ function ChatRouteLayout() {
     setBackgroundTarget(threadTarget);
   }
   const shownTarget = modalOpen ? backgroundTarget : threadTarget;
+  // Fantasia fork patch: while the split view is on, opening a thread from the sidebar adds it as a pane.
+  const splitActive = useSplitViewStore((state) => state.active && state.keys.length > 0);
+  const routeKey = threadTarget?.kind === "server" ? scopedThreadKey(threadTarget.threadRef) : null;
+  const seenRouteKey = useRef(routeKey);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- adds a thread the reader just opened to the split view's panes
+  useEffect(() => {
+    if (routeKey === seenRouteKey.current) return;
+    seenRouteKey.current = routeKey;
+    if (routeKey !== null && !modalOpen && useSplitViewStore.getState().active) {
+      useSplitViewStore.getState().open(routeKey);
+    }
+  }, [modalOpen, routeKey]);
+  if (splitActive && (shownTarget?.kind === "server" || modalOpen)) {
+    return (
+      <>
+        <SplitThreadView background={modalOpen} />
+        {modalOpen ? <Outlet /> : null}
+      </>
+    );
+  }
   return (
     <>
       {shownTarget?.kind === "server" && !modalOpen ? (
