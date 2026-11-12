@@ -5,6 +5,8 @@ import { useNavigate } from "@tanstack/react-router";
 import { ColumnsIcon, ExternalLinkIcon, PlusIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 
+import { useDiffPanelStore, type ToolCallDiffTarget } from "../diffPanelStore";
+import { useRightPanelStore } from "../rightPanelStore";
 import { useSplitViewStore } from "../splitViewStore";
 import { SPLIT_MAX_PANES, normalizeSizes } from "../splitView.logic";
 import { useQuietThreadShell, useVisibleThreadShells } from "../state/entities";
@@ -28,6 +30,24 @@ function SplitPane({ threadKey, focused }: { readonly threadKey: string; readonl
     close();
     void navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
   }, [close, navigate, ref]);
+  // A pane has no diff panel or terminal of its own: the thread opens full size with the diff already selected,
+  // or with the command queued for its terminal.
+  const openToolDiff = useCallback(
+    (target: ToolCallDiffTarget) => {
+      if (!ref) return;
+      useDiffPanelStore.getState().selectToolCall(ref, target);
+      useRightPanelStore.getState().open(ref, "diff");
+      openFull();
+    },
+    [openFull, ref],
+  );
+  const runShellCommand = useCallback(
+    (command: string) => {
+      useSplitViewStore.getState().queueShell(threadKey, command);
+      openFull();
+    },
+    [openFull, threadKey],
+  );
   if (!ref) return null;
   return (
     <div
@@ -79,7 +99,7 @@ function SplitPane({ threadKey, focused }: { readonly threadKey: string; readonl
           environmentId={ref.environmentId}
           threadId={ref.threadId}
           routeKind="server"
-          embedded={{ openToolDiff: openFull, runShellCommand: openFull }}
+          embedded={{ openToolDiff, runShellCommand }}
           reserveTitleBarControlInset={false}
         />
       </div>

@@ -20,6 +20,10 @@ interface SplitViewState {
   readonly sizes: readonly number[];
   /** The pane the reader last used; a new thread replaces it when every pane is taken. */
   readonly focusedKey: string | null;
+  /** A shell command a pane asked for; the thread opened full size runs it in its own terminal, then clears this. */
+  readonly pendingShell: { readonly threadKey: string; readonly command: string } | null;
+  readonly queueShell: (threadKey: string, command: string) => void;
+  readonly takePendingShell: (threadKey: string) => string | null;
   readonly open: (key: string, alsoKey?: string | null) => void;
   readonly close: () => void;
   readonly remove: (key: string) => void;
@@ -38,7 +42,15 @@ function isKeys(value: unknown): value is string[] {
 
 export const useSplitViewStore = create<SplitViewState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
+      pendingShell: null,
+      queueShell: (threadKey, command) => set({ pendingShell: { threadKey, command } }),
+      takePendingShell: (threadKey) => {
+        const pending = get().pendingShell;
+        if (!pending || pending.threadKey !== threadKey) return null;
+        set({ pendingShell: null });
+        return pending.command;
+      },
       active: false,
       keys: [],
       sizes: [],
