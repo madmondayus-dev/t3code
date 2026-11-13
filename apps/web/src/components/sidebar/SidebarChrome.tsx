@@ -173,6 +173,8 @@ function HistoryNavigationButton({
 }
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
+  // Fantasia fork patch: inside Fantasia the tab carries no name at all; the host's own sidebar already says where you are.
+  if (IS_FANTASIA_HOST) return null;
   return (
     <Link
       aria-label={`${APP_BASE_NAME} home`}
@@ -188,19 +190,6 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 }
 
 function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
-  // Fantasia fork patch: the host app's name, not T3's wordmark, when running inside Fantasia.
-  if (IS_FANTASIA_HOST) {
-    return (
-      <span
-        className={cn(
-          "truncate text-sm font-semibold tracking-tight",
-          onBackdrop ? "text-white" : "text-foreground",
-        )}
-      >
-        {APP_BASE_NAME}
-      </span>
-    );
-  }
   return (
     <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
       <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
