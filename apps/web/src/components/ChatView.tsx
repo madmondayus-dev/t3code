@@ -151,6 +151,9 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import { isElectron } from "../env";
+import { useSplitViewStore } from "../splitViewStore";
+import { createPortal } from "react-dom";
+import { PersistentThreadTerminalDrawer } from "./PersistentThreadTerminals";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
 import {
@@ -422,6 +425,8 @@ type ChatViewProps =
       forceExpandedMobileComposer?: boolean;
       /** A side chat in its parent's right panel; the parent keeps the keyboard and workspace UI. */
       embedded?: SideChatParentPanel;
+      /** Fantasia fork patch: an embedded chat that is one of the split view's panes keeps its own panel controls. */
+      splitPane?: SplitPaneChrome;
       routeKind: "server";
       draftId?: never;
     }
@@ -432,9 +437,21 @@ type ChatViewProps =
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       embedded?: never;
+      splitPane?: never;
       routeKind: "draft";
       draftId: DraftId;
     };
+
+/**
+ * Fantasia fork patch: what a split-view pane gives its embedded chat. The chat portals its panel controls into
+ * `controlsSlot` (the pane's header) and renders its own thread details and terminal drawer; the right panel opens
+ * the thread full size. Only the `focused` pane takes the panel shortcuts.
+ */
+export interface SplitPaneChrome {
+  readonly focused: boolean;
+  readonly controlsSlot: HTMLElement | null;
+  readonly openRightPanel: () => void;
+}
 
 const DismissedFallbackWindowSchema = Schema.NullOr(Schema.String);
 
@@ -451,6 +468,8 @@ export default function ChatView(props: ChatViewProps) {
     embedded: parentPanel,
   } = props;
   const embedded = parentPanel !== undefined;
+  // Fantasia fork patch: a split-view pane (see SplitPaneChrome).
+  const splitPane = props.routeKind === "server" && embedded ? props.splitPane : undefined;
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const draftId = routeKind === "draft" ? props.draftId : null;
@@ -2747,6 +2766,7 @@ export default function ChatView(props: ChatViewProps) {
   useChatShortcuts({
     enabled: activeThreadId !== null && !backgroundThread,
     embedded,
+    splitPaneFocused: splitPane?.focused === true,
     composerElement: composerOverlayElement,
     keybindings,
     scriptKeybindings,
@@ -2761,6 +2781,7 @@ export default function ChatView(props: ChatViewProps) {
     commands: {
       ...terminalShortcuts,
       ...rightPanelShortcuts,
+      ...(splitPane ? { "rightPanel.toggle": () => splitPane.openRightPanel() } : {}),
       ...threadLifecycleShortcuts,
       "thread.copyReference": ({ event }) => {
         if (!event.repeat) copyActiveThreadReference();
@@ -2835,6 +2856,20 @@ export default function ChatView(props: ChatViewProps) {
     if (activeThreadRef) useRightPanelStore.getState().setMaximized(activeThreadRef, false);
     runShellCommandStable(command);
   });
+  // Fantasia fork patch: a split-view pane asked to run a shell command; run it here once the thread is full size.
+  const pendingShellForThread = useSplitViewStore((state) =>
+    !embedded &&
+    activeThreadRef &&
+    state.pendingShell?.threadKey === scopedThreadKey(activeThreadRef)
+      ? state.pendingShell.command
+      : null,
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- consumes a command queued by the split view
+  useEffect(() => {
+    if (pendingShellForThread === null || !activeThreadRef) return;
+    const command = useSplitViewStore.getState().takePendingShell(scopedThreadKey(activeThreadRef));
+    if (command !== null) runSideChatShellCommandStable(command);
+  }, [activeThreadRef, pendingShellForThread, runSideChatShellCommandStable]);
   // Main-thread surfaces show this reason; `/side` sent anyway gets it as a toast.
   const sideChatDisabledReason =
     activeThread?.lineage.sideChat === true
@@ -3298,6 +3333,8 @@ export default function ChatView(props: ChatViewProps) {
     onToggleTerminal: toggleTerminalVisibilityStable,
     onToggleThreadPanel: toggleThreadPanelStable,
     onToggleRightPanel: toggleRightPanelStable,
+    // Fantasia fork patch: a split pane has no right panel of its own; its toggle opens the thread full size.
+    ...(splitPane ? { rightPanelOpen: false, onToggleRightPanel: splitPane.openRightPanel } : {}),
   } satisfies PanelLayoutControlsProps;
   const panelToggleControls = (
     <PanelLayoutControls
@@ -3336,6 +3373,19 @@ export default function ChatView(props: ChatViewProps) {
         />
       )}
       {rightPanelControlsAtRoot && !embedded ? panelLayoutControls : null}
+      {/* Fantasia fork patch: a split pane's panel controls sit in the pane's header and anchor its thread details. */}
+      {splitPane?.controlsSlot
+        ? createPortal(
+            <span
+              ref={threadPanelPopoverAnchorRef}
+              data-split-pane-controls
+              className="flex items-center"
+            >
+              <PanelLayoutControls {...panelToggleControlProps} />
+            </span>,
+            splitPane.controlsSlot,
+          )
+        : null}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
@@ -3450,7 +3500,12 @@ export default function ChatView(props: ChatViewProps) {
                   onCiteAssistantText={citeAssistantTextStable}
                   onReplyToResponse={replyToResponseStable}
                   {...(activeProject
-                    ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }
+                    ? {
+                        // Fantasia fork patch: a split pane runs commands in its own terminal drawer.
+                        onRunShellCommand: splitPane
+                          ? runShellCommandStable
+                          : (parentPanel?.runShellCommand ?? runShellCommandStable),
+                      }
                     : {})}
                   isWorking={isWorking}
                   runlessWorkActive={runlessWorkStartedAt !== null}
@@ -3879,7 +3934,7 @@ export default function ChatView(props: ChatViewProps) {
               />
             ) : null}
 
-            {embedded ? null : (
+            {embedded && !splitPane ? null : (
               <>
                 <BranchRestoreConfirmHost
                   threadKey={activeThreadKey}
@@ -3912,7 +3967,9 @@ export default function ChatView(props: ChatViewProps) {
                       rightPanelOpen &&
                       renderedRightPanelSurface?.kind === "file" &&
                       renderedRightPanelSurface.attachment === undefined
-                    )
+                    ) &&
+                    // Fantasia fork patch: only the focused split pane answers the open-in-editor chord.
+                    (!splitPane || splitPane.focused)
                   }
                   gitCwd={gitCwd}
                   workspaceMutationId={workspaceMutationId}
@@ -3972,6 +4029,23 @@ export default function ChatView(props: ChatViewProps) {
           </ThreadFindCanvas>
         </div>
 
+        {/* Fantasia fork patch: a split pane shows only its own thread's drawer; the drawers of every open thread
+            would mount the same sessions once per pane. */}
+        {splitPane && activeThreadRef ? (
+          <PersistentThreadTerminalDrawer
+            threadRef={activeThreadRef}
+            threadId={activeThreadRef.threadId}
+            active
+            composerHeight={composerReservedHeight}
+            launchContext={activeTerminalLaunchContext ?? null}
+            splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
+            splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
+            newShortcutLabel={newTerminalShortcutLabel ?? undefined}
+            closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
+            keybindings={keybindings}
+            onAddTerminalContext={addTerminalContextToDraftStable}
+          />
+        ) : null}
         {embedded ? null : (
           <ChatTerminalDrawers
             activeThreadKey={activeThreadKey}
