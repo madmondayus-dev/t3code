@@ -29,6 +29,20 @@ const SIDE_CHAT_PANE_COMMANDS: ReadonlySet<KeybindingCommand> = new Set([
   "rightPanel.toggleMaximized",
 ]);
 
+/**
+ * Fantasia fork patch: the panel chords the focused split-view pane takes from the window. Panes are embedded chats,
+ * so without this none of them would answer; only the focused one listens, so one key never toggles every pane.
+ */
+const SPLIT_PANE_COMMANDS: ReadonlySet<KeybindingCommand> = new Set([
+  "terminal.toggle",
+  "terminal.split",
+  "terminal.splitVertical",
+  "terminal.new",
+  "terminal.close",
+  "threadPanel.toggle",
+  "rightPanel.toggle",
+]);
+
 interface ChatShortcutsInput {
   readonly enabled: boolean;
   /**
@@ -37,6 +51,8 @@ interface ChatShortcutsInput {
    */
   readonly embedded?: boolean;
   readonly composerElement?: HTMLElement | null;
+  /** Fantasia fork patch: an embedded chat that is the focused split-view pane also takes SPLIT_PANE_COMMANDS. */
+  readonly splitPaneFocused?: boolean;
   readonly keybindings: ResolvedKeybindingsConfig;
   readonly scriptKeybindings: ResolvedKeybindingsConfig;
   readonly getShortcutContext: (target: EventTarget | null) => ShortcutMatchContext & {
@@ -117,6 +133,26 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     event.preventDefault();
     input.closeThreadFind();
   });
+  // Fantasia fork patch: the focused split pane's panel chords (see SPLIT_PANE_COMMANDS).
+  const handleSplitPaneShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || !input.enabled || isCommandPaletteOpen()) return;
+    const command = resolveChatShortcutCommand(event, input.keybindings, input.scriptKeybindings, {
+      context: input.getShortcutContext(event.target),
+    });
+    if (!command || !SPLIT_PANE_COMMANDS.has(command)) return;
+    const run = input.commands[command];
+    if (!run || run({ event, terminalFocusOwner: getTerminalFocusOwner() }) === false) return;
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  const splitPaneFocused = embedded && input.splitPaneFocused === true;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Fantasia fork patch: the focused split pane listens on the window for its panel chords
+  useEffect(() => {
+    if (!splitPaneFocused) return;
+    const onKeyDown = (event: KeyboardEvent) => handleSplitPaneShortcut(event);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [splitPaneFocused]);
   const handleComposerShortcut = useEffectEvent((event: KeyboardEvent) => {
     if (event.defaultPrevented || isCommandPaletteOpen()) return;
     const command = resolveChatShortcutCommand(event, input.keybindings, input.scriptKeybindings, {

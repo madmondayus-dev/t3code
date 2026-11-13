@@ -1,0 +1,401 @@
+// Fantasia fork patch: 2-4 threads side by side, or (3-4) in two rows. Each pane is an embedded ChatView (the same
+// one the side chat uses: it brings its own composer and no window-level shortcuts), so a pane keeps the thread's real
+// chat; as a split pane it also keeps its thread details, terminal drawer and panel toggles in the pane header.
+import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useNavigate } from "@tanstack/react-router";
+import { ColumnsIcon, ExternalLinkIcon, LayoutGridIcon, PlusIcon, XIcon } from "lucide-react";
+import { Fragment, useRef, useState } from "react";
+
+import { useDiffPanelStore, type ToolCallDiffTarget } from "../diffPanelStore";
+import { useRightPanelStore } from "../rightPanelStore";
+import { useSplitViewStore } from "../splitViewStore";
+import {
+  SPLIT_MAX_PANES,
+  SPLIT_MIN_PANE_PX,
+  SPLIT_MIN_ROW_PX,
+  clampRowSplit,
+  effectiveLayout,
+  gridRows,
+  minFractionFor,
+  normalizeRowSizes,
+  normalizeSizes,
+} from "../splitView.logic";
+import { cn } from "../lib/utils";
+import { useQuietThreadShell, useVisibleThreadShells } from "../state/entities";
+import { buildThreadRouteParams } from "../threadRoutes";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import ChatView from "./ChatView";
+import { Button } from "./ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { SidebarInset } from "./ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+
+function SplitPane({
+  threadKey,
+  focused,
+}: {
+  readonly threadKey: string;
+  readonly focused: boolean;
+}) {
+  const navigate = useNavigate();
+  const ref = parseScopedThreadKey(threadKey);
+  const shell = useQuietThreadShell(ref);
+  const remove = useSplitViewStore((state) => state.remove);
+  const focus = useSplitViewStore((state) => state.focus);
+  const close = useSplitViewStore((state) => state.close);
+  const openFull = () => {
+    if (!ref) return;
+    close();
+    void navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
+  };
+  // A pane has no diff panel of its own: the thread opens full size with the diff already selected. (Shell commands
+  // run in the pane's own terminal drawer; runShellCommand stays as the side-chat contract's fallback.)
+  const openToolDiff = (target: ToolCallDiffTarget) => {
+    if (!ref) return;
+    useDiffPanelStore.getState().selectToolCall(ref, target);
+    useRightPanelStore.getState().open(ref, "diff");
+    openFull();
+  };
+  // Fantasia fork patch: a pane has no right panel of its own, so its right-panel toggle opens the thread full size
+  // with the panel showing. Thread details and the terminal drawer open inside the pane.
+  const openRightPanel = () => {
+    if (!ref) return;
+    useRightPanelStore.getState().show(ref);
+    openFull();
+  };
+  const [controlsSlot, setControlsSlot] = useState<HTMLSpanElement | null>(null);
+  const splitPane = { focused, controlsSlot, openRightPanel };
+  const runShellCommand = (command: string) => {
+    useSplitViewStore.getState().queueShell(threadKey, command);
+    openFull();
+  };
+  if (!ref) return null;
+  return (
+    <div
+      data-side-chat-pane
+      data-split-pane
+      data-focused={focused ? "true" : "false"}
+      className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
+      onFocusCapture={() => focus(threadKey)}
+      onPointerDownCapture={() => focus(threadKey)}
+    >
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-3">
+        <span
+          className={
+            focused
+              ? "min-w-0 flex-1 truncate text-xs font-medium"
+              : "min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground"
+          }
+        >
+          {shell?.title ?? "Thread"}
+        </span>
+        <span
+          ref={setControlsSlot}
+          data-split-pane-controls-slot
+          className="flex shrink-0 items-center"
+        />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Open this thread full size"
+                onClick={openFull}
+              >
+                <ExternalLinkIcon className="size-3.5" />
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">Open full size</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Remove from split view"
+                onClick={() => remove(threadKey)}
+              >
+                <XIcon className="size-3.5" />
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">Remove from split view</TooltipPopup>
+        </Tooltip>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <ChatView
+          environmentId={ref.environmentId}
+          threadId={ref.threadId}
+          routeKind="server"
+          embedded={{ openToolDiff, runShellCommand }}
+          splitPane={splitPane}
+          reserveTitleBarControlInset={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Fantasia fork patch: dividers have an 8px grab area around a 1px line that lights up on hover, keep every pane above
+// a minimum size, step with the arrow keys, and reset to even sizes on double-click.
+function SplitDivider({
+  orientation,
+  count,
+  containerRef,
+  onResize,
+  label,
+}: {
+  /** "vertical" sits between columns; "horizontal" between rows. */
+  readonly orientation: "vertical" | "horizontal";
+  /** How many panes share the container along the drag axis. */
+  readonly count: number;
+  readonly containerRef: React.RefObject<HTMLDivElement | null>;
+  readonly onResize: (delta: number, minFraction: number) => void;
+  readonly label: string;
+}) {
+  const resetSizes = useSplitViewStore((state) => state.resetSizes);
+  const vertical = orientation === "vertical";
+  const extent = () => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    return rect ? (vertical ? rect.width : rect.height) : 0;
+  };
+  const minFraction = (size: number) =>
+    minFractionFor(size, count, vertical ? SPLIT_MIN_PANE_PX : SPLIT_MIN_ROW_PX);
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const size = extent();
+    if (size <= 0) return;
+    event.preventDefault();
+    const min = minFraction(size);
+    let last = vertical ? event.clientX : event.clientY;
+    const target = event.currentTarget;
+    target.setPointerCapture(event.pointerId);
+    const previousCursor = document.body.style.cursor;
+    document.body.style.cursor = vertical ? "col-resize" : "row-resize";
+    const move = (moveEvent: PointerEvent) => {
+      const at = vertical ? moveEvent.clientX : moveEvent.clientY;
+      onResize((at - last) / size, min);
+      last = at;
+    };
+    const up = () => {
+      document.body.style.cursor = previousCursor;
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", up);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", up);
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation={orientation}
+      aria-label={`${label} (double-click to reset)`}
+      tabIndex={0}
+      data-split-divider={orientation}
+      className={cn(
+        "group relative z-10 shrink-0 touch-none focus-visible:outline-none",
+        vertical ? "-mx-1 w-2 cursor-col-resize" : "-my-1 h-2 cursor-row-resize",
+      )}
+      onPointerDown={onPointerDown}
+      onDoubleClick={resetSizes}
+      onKeyDown={(event) => {
+        const step = event.shiftKey ? 0.05 : 0.02;
+        const back = vertical ? "ArrowLeft" : "ArrowUp";
+        const forward = vertical ? "ArrowRight" : "ArrowDown";
+        if (event.key !== back && event.key !== forward) return;
+        event.preventDefault();
+        onResize(event.key === back ? -step : step, minFraction(extent()));
+      }}
+    >
+      <div
+        className={cn(
+          "pointer-events-none absolute bg-border transition-all group-hover:bg-primary/60 group-focus-visible:bg-primary/60",
+          vertical
+            ? "inset-y-0 left-1/2 w-px -translate-x-1/2 group-hover:w-[3px] group-focus-visible:w-[3px]"
+            : "inset-x-0 top-1/2 h-px -translate-y-1/2 group-hover:h-[3px] group-focus-visible:h-[3px]",
+        )}
+      />
+    </div>
+  );
+}
+
+/** Fantasia fork patch: one run of panes side by side, with width dividers between them. */
+function PaneRow({
+  keys,
+  fractions,
+  focusedKey,
+  onResize,
+  className,
+  style,
+}: {
+  readonly keys: readonly string[];
+  readonly fractions: readonly number[];
+  readonly focusedKey: string | null;
+  readonly onResize: (index: number, delta: number, minFraction: number) => void;
+  readonly className?: string;
+  readonly style?: React.CSSProperties;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={containerRef} className={cn("flex min-h-0 min-w-0", className)} style={style}>
+      {keys.map((key, index) => (
+        <Fragment key={key}>
+          {index > 0 ? (
+            <SplitDivider
+              orientation="vertical"
+              count={keys.length}
+              containerRef={containerRef}
+              label="Resize split view panes"
+              onResize={(delta, min) => onResize(index - 1, delta, min)}
+            />
+          ) : null}
+          <div className="flex min-h-0 min-w-0" style={{ flex: `${fractions[index]} 1 0%` }}>
+            <SplitPane threadKey={key} focused={key === focusedKey} />
+          </div>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+function AddThreadMenu({ keys }: { readonly keys: readonly string[] }) {
+  const open = useSplitViewStore((state) => state.open);
+  const shells = useVisibleThreadShells();
+  const choices = shells
+    .filter(
+      (shell) =>
+        shell.archivedAt === null &&
+        !keys.includes(scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id))),
+    )
+    .toSorted((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    .slice(0, 30);
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <Button variant="ghost" size="xs" aria-label="Add a thread to the split view">
+            <PlusIcon className="size-3.5" />
+            Add thread
+          </Button>
+        }
+      />
+      <MenuPopup align="end" className="max-h-80 w-72 overflow-y-auto">
+        {choices.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-muted-foreground">No other threads</div>
+        ) : (
+          choices.map((shell) => (
+            <MenuItem
+              key={scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id))}
+              onClick={() => open(scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)))}
+            >
+              <span className="truncate">{shell.title}</span>
+            </MenuItem>
+          ))
+        )}
+      </MenuPopup>
+    </Menu>
+  );
+}
+
+export function SplitThreadView({ background = false }: { readonly background?: boolean }) {
+  const keys = useSplitViewStore((state) => state.keys);
+  const sizes = useSplitViewStore((state) => state.sizes);
+  const layout = useSplitViewStore((state) => state.layout);
+  const rowSplit = useSplitViewStore((state) => state.rowSplit);
+  const rowSizes = useSplitViewStore((state) => state.rowSizes);
+  const focusedKey = useSplitViewStore((state) => state.focusedKey);
+  const close = useSplitViewStore((state) => state.close);
+  const resize = useSplitViewStore((state) => state.resize);
+  const resizeInRow = useSplitViewStore((state) => state.resizeInRow);
+  const resizeRows = useSplitViewStore((state) => state.resizeRows);
+  const setLayout = useSplitViewStore((state) => state.setLayout);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const shownLayout = effectiveLayout(layout, keys.length);
+  // Removing the last pane turns split view off in the store (splitViewStore.remove).
+  const [topKeys, bottomKeys] = gridRows(keys);
+  const [topSizes, bottomSizes] = normalizeRowSizes(rowSizes, keys.length);
+  const topShare = clampRowSplit(rowSplit);
+  return (
+    <SidebarInset
+      className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
+      inert={background}
+    >
+      <div data-split-view data-split-layout={shownLayout} className="flex h-full min-h-0 flex-col">
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
+          <ColumnsIcon className="size-3.5 text-muted-foreground" />
+          <span className="flex-1 text-xs font-medium">
+            Split view · {keys.length} of {SPLIT_MAX_PANES}
+          </span>
+          {keys.length >= 3 ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={
+                      shownLayout === "grid" ? "Show panes side by side" : "Show panes in two rows"
+                    }
+                    aria-pressed={shownLayout === "grid"}
+                    onClick={() => setLayout(shownLayout === "grid" ? "columns" : "grid")}
+                  >
+                    {shownLayout === "grid" ? (
+                      <ColumnsIcon className="size-3.5" />
+                    ) : (
+                      <LayoutGridIcon className="size-3.5" />
+                    )}
+                  </Button>
+                }
+              />
+              <TooltipPopup side="bottom">
+                {shownLayout === "grid" ? "Side by side" : "Two rows"}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {keys.length < SPLIT_MAX_PANES ? <AddThreadMenu keys={keys} /> : null}
+          <Button variant="ghost" size="xs" onClick={close}>
+            Exit split view
+          </Button>
+        </div>
+        {shownLayout === "grid" ? (
+          <div ref={gridRef} className="flex min-h-0 flex-1 flex-col">
+            <PaneRow
+              keys={topKeys}
+              fractions={topSizes}
+              focusedKey={focusedKey}
+              onResize={(index, delta, min) => resizeInRow(0, index, delta, min)}
+              style={{ flex: `${topShare} 1 0%` }}
+            />
+            <SplitDivider
+              orientation="horizontal"
+              count={2}
+              containerRef={gridRef}
+              label="Resize split view rows"
+              onResize={resizeRows}
+            />
+            <PaneRow
+              keys={bottomKeys}
+              fractions={bottomSizes}
+              focusedKey={focusedKey}
+              onResize={(index, delta, min) => resizeInRow(1, index, delta, min)}
+              style={{ flex: `${1 - topShare} 1 0%` }}
+            />
+          </div>
+        ) : (
+          <PaneRow
+            keys={keys}
+            fractions={normalizeSizes(sizes, keys.length)}
+            focusedKey={focusedKey}
+            onResize={resize}
+            className="flex-1"
+          />
+        )}
+      </div>
+    </SidebarInset>
+  );
+}
