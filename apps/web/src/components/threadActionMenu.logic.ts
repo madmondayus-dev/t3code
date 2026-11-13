@@ -6,6 +6,7 @@ import { m, type MessageResolver } from "../i18n/messages";
 
 export type ThreadActionMenuId =
   | "find"
+  | "split-view"
   | "new-thread-on-branch"
   | "filter-by-project"
   | "turn-into-project"
@@ -98,6 +99,8 @@ export interface ThreadActionMenuState {
   readonly canFind?: boolean;
   /** False where no inline title editor is rendered, such as sidebar search results. */
   readonly canRename?: boolean;
+  /** Fantasia fork patch: whether this thread is one of the split view's panes. */
+  readonly inSplitView?: boolean;
   readonly branch: string | null;
   readonly projectFilter: {
     readonly label: string;
@@ -129,6 +132,7 @@ export interface ThreadActionMenuState {
 export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean {
   return ![
     "find",
+    "split-view",
     "new-thread-on-branch",
     "project-settings",
     "mark-unread",
@@ -149,6 +153,13 @@ export function buildThreadActionMenuItems(
     ...(state.canFind
       ? [{ id: "find" as const, label: resolve(msg("Find in thread")), icon: "text-search" }]
       : []),
+    {
+      id: "split-view" as const,
+      label: state.inSplitView
+        ? resolve(msg("Remove from split view"))
+        : resolve(msg("Open in split view")),
+      icon: "columns",
+    },
     ...(state.branch
       ? [
           {
