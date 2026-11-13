@@ -246,6 +246,7 @@ import {
   useComboboxFilter,
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
+import { useSplitViewStore } from "../splitViewStore";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
@@ -2634,6 +2635,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 threadRef.environmentId,
                 AuthOrchestrationOperateScope,
               ),
+              inSplitView:
+                useSplitViewStore.getState().active &&
+                useSplitViewStore.getState().keys.includes(threadKey),
               branch: thread.branch ?? null,
               // An archived project is not a filter choice.
               projectFilter:
@@ -2682,6 +2686,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           return;
         }
         switch (clicked.value) {
+          case "split-view": {
+            // Fantasia fork patch: a thread's context menu adds it to, or removes it from, the split view.
+            const split = useSplitViewStore.getState();
+            if (split.active && split.keys.includes(threadKey)) split.remove(threadKey);
+            else split.open(threadKey, routeThreadKey);
+            return;
+          }
           case "filter-by-project":
             if (threadProjectGroup) {
               setProjectScopeKeys(

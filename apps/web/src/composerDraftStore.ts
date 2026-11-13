@@ -145,7 +145,11 @@ const composerPersistStorage: PersistStorage<ComposerPersistState> = {
     }
     return JSON.parse(raw) as StorageValue<ComposerPersistState>;
   },
-  setItem: (name, value) => composerDebouncedStorage.setItem(name, value),
+  setItem: (name, value) => {
+    composerDebouncedStorage.setItem(name, value);
+    // Embedded views can close without beforeunload; unsent text must already be stored.
+    composerDebouncedStorage.flush();
+  },
   removeItem: (name) => composerDebouncedStorage.removeItem(name),
 };
 

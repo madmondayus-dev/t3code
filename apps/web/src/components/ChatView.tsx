@@ -134,6 +134,7 @@ import {
 import { AsyncResult } from "effect/reactivity";
 import { isElectron } from "../env";
 import { useDiffPanelStore } from "../diffPanelStore";
+import { useSplitViewStore } from "../splitViewStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
 import {
@@ -2781,6 +2782,18 @@ export default function ChatView(props: ChatViewProps) {
     if (activeThreadRef) useRightPanelStore.getState().setMaximized(activeThreadRef, false);
     runShellCommandStable(command);
   });
+  // Fantasia fork patch: a split-view pane asked to run a shell command; run it here once the thread is full size.
+  const pendingShellForThread = useSplitViewStore((state) =>
+    !embedded && activeThreadRef && state.pendingShell?.threadKey === scopedThreadKey(activeThreadRef)
+      ? state.pendingShell.command
+      : null,
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- consumes a command queued by the split view
+  useEffect(() => {
+    if (pendingShellForThread === null || !activeThreadRef) return;
+    const command = useSplitViewStore.getState().takePendingShell(scopedThreadKey(activeThreadRef));
+    if (command !== null) runSideChatShellCommandStable(command);
+  }, [activeThreadRef, pendingShellForThread, runSideChatShellCommandStable]);
   // Main-thread surfaces show this reason; `/side` sent anyway gets it as a toast.
   const sideChatDisabledReason =
     activeThread?.lineage.sideChat === true

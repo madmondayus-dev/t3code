@@ -2006,6 +2006,32 @@ describe("composerDraftStore sticky composer settings", () => {
   });
 });
 
+describe("composer draft immediate persistence", () => {
+  it.each([
+    { name: "new draft", target: DraftId.make("draft-immediate-persistence") },
+    {
+      name: "existing thread",
+      target: scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-immediate-persistence")),
+    },
+  ])(
+    "stores the latest $name text before returning, without a timer or unload",
+    async ({ target }) => {
+      resetComposerDraftStore();
+      await useComposerDraftStore.persist.clearStorage();
+      const storage = useComposerDraftStore.persist.getOptions().storage;
+      expect(storage).toBeDefined();
+      const marker = "unsent text saved before normal quit";
+      useComposerDraftStore.getState().setPrompt(target, marker);
+      expect(JSON.stringify(await storage?.getItem(COMPOSER_DRAFT_STORAGE_KEY))).toContain(marker);
+      useComposerDraftStore.getState().setPrompt(target, `${marker} plus the final character`);
+      expect(JSON.stringify(await storage?.getItem(COMPOSER_DRAFT_STORAGE_KEY))).toContain(
+        `${marker} plus the final character`,
+      );
+      await useComposerDraftStore.persist.clearStorage();
+    },
+  );
+});
+
 describe("composerDraftStore model seed migration", () => {
   const staleDraftId = DraftId.make("draft-legacy-stale-model");
   const explicitDraftId = DraftId.make("draft-legacy-explicit-model");

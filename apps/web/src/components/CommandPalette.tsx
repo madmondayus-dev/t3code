@@ -2477,7 +2477,7 @@ function OpenCommandPaletteDialog(props: {
     (browseEnvironmentId === primaryEnvironmentId ||
       (browseEnvironmentIsDesktopLocal && browseDesktopInstanceId !== null)) &&
     typeof window !== "undefined" &&
-    window.desktopBridge !== undefined;
+    (window.desktopBridge !== undefined || window.fantasiaHost !== undefined);
   const fileManagerInitialPath = (() => {
     if (!canOpenProjectFromFileManager) {
       return undefined;
